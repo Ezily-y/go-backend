@@ -29,6 +29,12 @@ import (
 const shutdownTimeout = 10 * time.Second
 
 func main() {
+	os.Exit(run())
+}
+
+// run 执行完整的应用生命周期，返回退出码（0=正常，1=失败）。
+// 拆分为独立函数是为了让 defer 在 os.Exit 之前执行，避免资源泄漏。
+func run() int {
 	// 支持 -c / -config 指定配置文件路径，便于多环境部署。
 	var (
 		configPath string
@@ -41,25 +47,24 @@ func main() {
 
 	if showVer {
 		fmt.Println(version.Get())
-		return
+		return 0
 	}
 
 	// 1. 配置：失败直接退出，此时日志尚未初始化，只能打印到 stderr。
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[FATAL] 加载配置失败: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 
 	// 2. 日志：之后的所有错误都走 zap。
-	initErr := logger.Initialize(logger.Options{
+	if err := logger.Initialize(logger.Options{
 		Level:  cfg.Log.Level,
 		Format: cfg.Log.Format,
 		File:   cfg.Log.File,
-	})
-	if initErr != nil {
-		fmt.Fprintf(os.Stderr, "[FATAL] 初始化日志失败: %v\n", initErr)
-		os.Exit(1)
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "[FATAL] 初始化日志失败: %v\n", err)
+		return 1
 	}
 	defer logger.Sync()
 
@@ -94,17 +99,12 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-	fatal := false
 	select {
 	case startErr := <-errCh:
 		logger.Errorf("HTTP 服务启动失败: %v", startErr)
-		fatal = true
+		return 1
 	case sig := <-quit:
 		logger.Infof("收到退出信号 %v，开始优雅关闭...", sig)
-	}
-
-	if fatal {
-		os.Exit(1)
 	}
 
 	// 6. 优雅关闭：先停止接收新请求，等待在途请求完成，再释放资源。
@@ -118,4 +118,5 @@ func main() {
 		logger.Errorf("关闭数据库连接失败: %v", err)
 	}
 	logger.Infof("已安全退出")
+	return 0
 }
