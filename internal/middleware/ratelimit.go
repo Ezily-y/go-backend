@@ -82,10 +82,3 @@ func (m *bucketMap) gc() {
 		}
 	}
 }
-
-// size 返回当前维护的条目数，仅用于测试与监控。
-func (m *bucketMap) size() int {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return len(m.limiters)
-}

@@ -70,45 +70,37 @@ func New(cfg *config.Config, h *Handlers) *gin.Engine {
 	//
 	// 注意中间件必须写在 handler 之前：gin 按参数顺序串起整条 handler 链，
 	// 把限流放在后面的话，请求会先被 handler 处理完，限流形同虚设
-	//（实测表现为永远返回参数校验 400 而非 429）。
+	// （实测表现为永远返回参数校验 400 而非 429）。
 	authGroup := v1.Group("/auth")
-	{
-		authGroup.POST("/login", middleware.RateLimiter(1, 5), h.Auth.Login)
-		authGroup.POST("/refresh", middleware.RateLimiter(1, 10), h.Auth.Refresh)
-	}
+	authGroup.POST("/login", middleware.RateLimiter(1, 5), h.Auth.Login)
+	authGroup.POST("/refresh", middleware.RateLimiter(1, 10), h.Auth.Refresh)
 
 	// JWT 区：登录后的常规接口
 	protected := v1.Group("", middleware.JWT(h.JWT))
-	{
-		protected.GET("/auth/me", h.Auth.Me)
-		protected.PUT("/auth/password", h.Auth.ChangePassword)
-		protected.GET("/system/info", h.System.Info)
+	protected.GET("/auth/me", h.Auth.Me)
+	protected.PUT("/auth/password", h.Auth.ChangePassword)
+	protected.GET("/system/info", h.System.Info)
 
-		// API Key 管理：任何登录用户都能管理自己的密钥
-		protected.GET("/apikeys", h.APIKey.List)
-		protected.POST("/apikeys", h.APIKey.Create)
-		protected.PATCH("/apikeys/:id", h.APIKey.Update)
-		protected.DELETE("/apikeys/:id", h.APIKey.Delete)
-	}
+	// API Key 管理：任何登录用户都能管理自己的密钥
+	protected.GET("/apikeys", h.APIKey.List)
+	protected.POST("/apikeys", h.APIKey.Create)
+	protected.PATCH("/apikeys/:id", h.APIKey.Update)
+	protected.DELETE("/apikeys/:id", h.APIKey.Delete)
 
 	// 用户管理：仅 admin 可见
 	admin := v1.Group("/users", middleware.JWT(h.JWT), middleware.RequireAdmin())
-	{
-		admin.GET("", h.User.List)
-		admin.POST("", h.User.Create)
-		admin.GET("/:id", h.User.Get)
-		admin.PUT("/:id", h.User.Update)
-		admin.DELETE("/:id", h.User.Delete)
-	}
+	admin.GET("", h.User.List)
+	admin.POST("", h.User.Create)
+	admin.GET("/:id", h.User.Get)
+	admin.PUT("/:id", h.User.Update)
+	admin.DELETE("/:id", h.User.Delete)
 
 	// API Key 区：供外部工具调用，与 JWT 区完全隔离。
 	tool := v1.Group("/tool", middleware.APIKey(h.KeySVC.Resolve))
-	{
-		// 示例端点，验证 API Key 鉴权链路是否打通
-		tool.GET("/ping", func(c *gin.Context) {
-			response.OK(c, gin.H{"pong": true, "role": middleware.GetRole(c)})
-		})
-	}
+	// 示例端点，验证 API Key 鉴权链路是否打通
+	tool.GET("/ping", func(c *gin.Context) {
+		response.OK(c, gin.H{"pong": true, "role": middleware.GetRole(c)})
+	})
 
 	// 404 / 405 统一成标准响应体
 	e.NoRoute(func(c *gin.Context) {

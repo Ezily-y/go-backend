@@ -69,7 +69,7 @@ func RequireRole(roles ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		role := GetRole(c)
 
-		if _, ok := allowed[string(role)]; ok {
+		if _, ok := allowed[role]; ok {
 			c.Next()
 			return
 		}

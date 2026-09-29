@@ -9,7 +9,10 @@
 // 约定：code == 0 表示成功，非 0 一律是失败。
 package apperr
 
-import "net/http"
+import (
+	"errors"
+	"net/http"
+)
 
 // 通用成功/未知错误
 const (
@@ -135,7 +138,8 @@ func FromError(err error) *Error {
 	if err == nil {
 		return nil
 	}
-	if e, ok := err.(*Error); ok {
+	var e *Error
+	if errors.As(err, &e) {
 		return e
 	}
 	return NewWrap(CodeUnknown, "服务器内部错误", err)

@@ -41,7 +41,7 @@ func Connect(cfg config.DatabaseConfig) error {
 	case "sqlite":
 		// SQLite 要求数据目录必须存在，否则连接直接失败。
 		if dir := filepath.Dir(cfg.DSN); dir != "" && dir != "." {
-			if err := os.MkdirAll(dir, 0o755); err != nil {
+			if err := os.MkdirAll(dir, 0o750); err != nil {
 				return fmt.Errorf("创建 SQLite 目录失败: %w", err)
 			}
 		}
@@ -149,14 +149,14 @@ type gormBridge struct {
 // Trace 记录每条 SQL 的耗时；错误与慢查询分别落到 Error/Warn。
 func (b gormBridge) Trace(ctx context.Context, begin time.Time, fc func() (string, int64), err error) {
 	elapsed := time.Since(begin)
-	sql, rows := fc()
+	query, rows := fc()
 	switch {
 	case err != nil:
-		logger.Errorf("[SQL] %v | %s | rows=%d | %s", err, sql, rows, elapsed)
+		logger.Errorf("[SQL] %v | %s | rows=%d | %s", err, query, rows, elapsed)
 	case elapsed > b.slow:
-		logger.Warnf("[SQL] 慢查询 %s | %s | rows=%d", elapsed, sql, rows)
+		logger.Warnf("[SQL] 慢查询 %s | %s | rows=%d", elapsed, query, rows)
 	default:
-		logger.Debugf("[SQL] %s | rows=%d | %s", sql, rows, elapsed)
+		logger.Debugf("[SQL] %s | rows=%d | %s", query, rows, elapsed)
 	}
 }
 

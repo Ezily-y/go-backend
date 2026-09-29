@@ -10,6 +10,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -94,7 +95,8 @@ func Load(path string) (*Config, error) {
 	if err := v.ReadInConfig(); err != nil {
 		// 默认路径允许配置文件缺失（回落到默认值 + 环境变量）；
 		// 但通过 CONFIG_PATH 或参数显式指定的文件读不到，属于致命错误。
-		if _, notFound := err.(viper.ConfigFileNotFoundError); !notFound && !os.IsNotExist(err) {
+		var notFound viper.ConfigFileNotFoundError
+		if !errors.As(err, &notFound) && !os.IsNotExist(err) {
 			return nil, fmt.Errorf("读取配置文件 %s 失败: %w", path, err)
 		}
 	}

@@ -67,7 +67,7 @@ func Initialize(opts Options) error {
 	// 配置了日志文件则额外写一份（按大小滚动，避免磁盘写满）。
 	if opts.File != "" {
 		if dir := filepath.Dir(opts.File); dir != "" && dir != "." {
-			if err := os.MkdirAll(dir, 0o755); err != nil {
+			if err := os.MkdirAll(dir, 0o750); err != nil {
 				return fmt.Errorf("创建日志目录失败: %w", err)
 			}
 		}

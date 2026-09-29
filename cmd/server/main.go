@@ -52,12 +52,13 @@ func main() {
 	}
 
 	// 2. 日志：之后的所有错误都走 zap。
-	if err := logger.Initialize(logger.Options{
+	initErr := logger.Initialize(logger.Options{
 		Level:  cfg.Log.Level,
 		Format: cfg.Log.Format,
 		File:   cfg.Log.File,
-	}); err != nil {
-		fmt.Fprintf(os.Stderr, "[FATAL] 初始化日志失败: %v\n", err)
+	})
+	if initErr != nil {
+		fmt.Fprintf(os.Stderr, "[FATAL] 初始化日志失败: %v\n", initErr)
 		os.Exit(1)
 	}
 	defer logger.Sync()
@@ -94,8 +95,9 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
 	select {
-	case err := <-errCh:
-		logger.Errorf("HTTP 服务启动失败: %v", err)
+	case startErr := <-errCh:
+		logger.Errorf("HTTP 服务启动失败: %v", startErr)
+		logger.Sync()
 		os.Exit(1)
 	case sig := <-quit:
 		logger.Infof("收到退出信号 %v，开始优雅关闭...", sig)

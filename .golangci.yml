@@ -97,6 +97,13 @@ linters:
           - forcetypeassert
           - dupl
           - prealloc
+      # docs/ 是 swag 生成的代码，不检查
+      - path: 'docs/'
+        linters:
+          - goconst
+          - gocritic
+          - revive
+          - unused
       # 跳过 go-bindata / wire / sqlc 之类的生成代码
       - path: '(.*)\.pb\.go$'
         linters:
