@@ -94,13 +94,17 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
+	fatal := false
 	select {
 	case startErr := <-errCh:
 		logger.Errorf("HTTP 服务启动失败: %v", startErr)
-		logger.Sync()
-		os.Exit(1)
+		fatal = true
 	case sig := <-quit:
 		logger.Infof("收到退出信号 %v，开始优雅关闭...", sig)
+	}
+
+	if fatal {
+		os.Exit(1)
 	}
 
 	// 6. 优雅关闭：先停止接收新请求，等待在途请求完成，再释放资源。
