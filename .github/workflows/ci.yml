@@ -1,0 +1,97 @@
+# ==========================================================================
+# CI：格式检查 → 静态分析 → Lint → 构建 → 测试
+#
+# 触发方式有两种：
+#   1. push / pull_request  —— 独立跑，作为 PR 门禁
+#   2. workflow_call        —— 被 deploy.yml 复用，保证"测试不过就不部署"
+#
+# 注意：Go 版本从 go.mod 读取（当前为 1.26.0）。
+# 不要在这里写死 go-version —— go.mod 升级时容易忘记同步，
+# 会出现"本地能编、CI 编不过"的怪问题。
+# ==========================================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call: # 供 deploy.yml 复用
+
+# 同一分支的新 push 会取消上一次仍在跑的 CI，节省 runner 配额
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # 与 Dockerfile 保持一致：SQLite 用的是纯 Go 实现（github.com/glebarez/sqlite），
+  # 因此全程 CGO_ENABLED=0。若 CI 开了 CGO 而镜像没开，可能掩盖真实问题。
+  CGO_ENABLED: "0"
+  GOPROXY: https://goproxy.cn,direct
+
+jobs:
+  lint-test:
+    name: 格式 / 静态分析 / 测试
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Go（版本取自 go.mod）
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: 校验依赖完整性
+        # go mod verify 确保模块缓存没被篡改；
+        # 若 go.mod/go.sum 不一致会在这里暴露，而不是等到编译时。
+        run: |
+          go mod download
+          go mod verify
+
+      - name: 检查 gofmt 格式
+        # gofmt -l 列出所有未格式化的文件；非空即失败。
+        # 用 -s 同时检查代码简化建议，与 Makefile 的 fmt-check 一致。
+        run: |
+          unformatted=$(gofmt -l -s .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::以下文件未格式化，请本地执行 'gofmt -w -s .' 后重新提交："
+            echo "$unformatted"
+            exit 1
+          fi
+          echo "✅ 格式检查通过"
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          # 与本地版本保持一致，避免"本地过了 CI 没过"。
+          # golangci-lint v2 的配置 schema 与 v1 不兼容，升级时需同步改 .golangci.yml。
+          version: v2.14.0
+          args: --timeout=5m
+
+      - name: 构建
+        run: go build -trimpath -ldflags "-s -w" ./...
+
+      - name: 测试
+        # -race 需要 CGO，而本项目 CGO_ENABLED=0（纯 Go sqlite），
+        # 所以这里不能用 -race。若后续确实需要竞态检测，
+        # 单独加一个 CGO_ENABLED=1 的 job，不要为此改动全局设置。
+        run: go test -coverprofile=coverage.out -covermode=atomic ./...
+
+      - name: 上传覆盖率报告
+        # 即使测试失败也上传，便于排查
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+          retention-days: 7

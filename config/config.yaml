@@ -1,0 +1,43 @@
+# ==========================================================================
+# 应用配置
+# 优先级：内置默认值 < 本文件 < 环境变量（见 internal/config/config.go 的 BindEnv）
+# 敏感信息（JWT 密钥、数据库密码）建议一律走环境变量，不要提交到仓库。
+# ==========================================================================
+
+app:
+  name: go-backend
+  mode: debug                 # debug | release | test，release 会关闭 gin 的调试输出
+  port: 8080
+  upload_dir: ./data/uploads  # 文件上传根目录
+  cors_origins:
+    - "*"                     # 生产环境请改成前端域名白名单
+  jwt:
+    # 生产环境务必用环境变量 JWT_SECRET 覆盖，且长度 >= 32
+    secret: "dev-only-secret-change-me-0123456789"
+    access_ttl: 2h            # 访问令牌有效期
+    refresh_ttl: 168h         # 刷新令牌有效期（7 天）
+  bootstrap:
+    # 首次启动时自动创建管理员账号（已存在则跳过）
+    enabled: true
+    username: admin
+    password: admin123456
+    role: admin
+
+log:
+  level: info                 # debug | info | warn | error
+  format: console             # console | json，release 建议 json
+  file: ""                    # 留空则只输出到标准输出；填写路径后同时写文件
+
+database:
+  driver: sqlite              # sqlite | postgres
+  dsn: ./data/app.db          # sqlite 为文件路径；postgres 为完整连接串
+  max_open_conns: 20
+  max_idle_conns: 5
+  conn_max_lifetime: 30m
+  slow_threshold: 200ms       # 慢 SQL 告警阈值
+
+redis:
+  enabled: false              # 二期启用（缓存 / 限流 / Asynq 任务队列）
+  addr: 127.0.0.1:6379
+  password: ""
+  db: 0

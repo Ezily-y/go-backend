@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "permissions": {
+    "allow": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Bash(ls *)",
+      "Bash(cat *)",
+      "Bash(find *)",
+      "Bash(bash -n *)",
+      "Bash(go build *)",
+      "Bash(go test *)",
+      "Bash(go vet *)",
+      "Bash(go mod *)",
+      "Bash(go run *)",
+      "Bash(go list *)",
+      "Bash(go env *)",
+      "Bash(gofmt *)",
+      "Bash(golangci-lint *)",
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git show *)",
+      "Bash(git branch *)",
+      "Bash(git remote *)",
+      "Bash(git ls-files *)"
+    ],
+    "deny": [
+      "Bash(git push --force*)",
+      "Bash(git push -f*)",
+      "Bash(git reset --hard*)",
+      "Bash(git clean -fd*)",
+      "Bash(rm -rf /*)",
+      "Bash(cat .env)",
+      "Read(.env)",
+      "Edit(.env)",
+      "Edit(**/*.pem)",
+      "Edit(**/id_rsa*)"
+    ]
+  }
+}

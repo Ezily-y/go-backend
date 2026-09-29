@@ -1,0 +1,97 @@
+# ==========================================================================
+# 开发环境一键启动：Go 应用 + PostgreSQL + Redis
+#
+# 用法：
+#   make up      启动
+#   make logs    查看应用日志
+#   make down    停止（保留数据卷）
+#   docker compose down -v   停止并删除数据
+# ==========================================================================
+
+services:
+  # ---- 应用 ----
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${VERSION:-dev}
+    container_name: go-backend-app
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    environment:
+      # 容器内改用 postgres，而非默认的 sqlite
+      DB_DRIVER: postgres
+      DB_DSN: "host=postgres user=postgres password=postgres dbname=gobackend port=5432 sslmode=disable TimeZone=Asia/Shanghai"
+      APP_MODE: debug
+      LOG_LEVEL: debug
+      LOG_FORMAT: console
+      # 生产环境务必替换为随机密钥，且不要写进仓库
+      JWT_SECRET: "dev-only-secret-change-me-0123456789"
+      REDIS_ENABLED: "true"
+      REDIS_ADDR: "redis:6379"
+    volumes:
+      # 持久化上传文件与本地日志
+      - ./data:/app/data
+      - ./logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - backend
+
+  # ---- PostgreSQL ----
+  postgres:
+    image: postgres:16-alpine
+    container_name: go-backend-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: gobackend
+      # 与后端一致，避免时间字段出现时区偏移
+      TZ: Asia/Shanghai
+    ports:
+      # 暴露到宿主机便于用客户端工具连；生产环境应删掉这一行
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d gobackend"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - backend
+
+  # ---- Redis（二期：缓存 / 限流 / Asynq 任务队列）----
+  redis:
+    image: redis:7-alpine
+    container_name: go-backend-redis
+    restart: unless-stopped
+    # appendonly 开启 AOF 持久化，重启后队列任务不丢
+    command: redis-server --appendonly yes --requirepass ""
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - backend
+
+volumes:
+  postgres-data:
+    driver: local
+  redis-data:
+    driver: local
+
+networks:
+  backend:
+    driver: bridge

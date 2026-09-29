@@ -1,0 +1,29 @@
+# 构建产物
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+
+# 运行期产生
+/logs/
+/data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# 本地私密配置与环境变量
+.env
+config/config.local.yaml
+
+# IDE / 编辑器
+.idea/
+.vscode/
+*.swp
+
+# 依赖缓存
+vendor/
+
+# Claude Code 个人本机配置（不提交）
+.claude/settings.local.json

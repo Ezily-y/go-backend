@@ -1,0 +1,241 @@
+# ==========================================================================
+# 部署：复用 CI（测试不过就不部署）→ 构建镜像推腾讯云 TCR → SSH 到服务器滚动更新
+#
+# 所有敏感信息都在 GitHub Secrets，仓库里只有名字没有值。
+#
+# 需要配置的 Secrets（Settings → Secrets and variables → Actions）：
+#   TCR_REGISTRY     镜像仓库地址，例: ccr.ccs.tencentyun.com/my-ns（不带尾斜杠）
+#   TCR_IMAGE        镜像名，例: go-backend（最终镜像 = TCR_REGISTRY/TCR_IMAGE:tag）
+#   TCR_USERNAME     腾讯云 TCR 访问凭证的用户名
+#   TCR_PASSWORD     腾讯云 TCR 访问凭证的密码
+#   DEPLOY_HOST      服务器地址（公网 IP 或域名）
+#   DEPLOY_USER      SSH 用户名，例: ubuntu / lighthouse / root
+#   DEPLOY_SSH_KEY   SSH 私钥全文（建议专用密钥，不要用个人密钥）
+#   DEPLOY_PATH      服务器上的部署目录，例: /opt/go-backend
+#
+# 回滚：GitHub → Actions → 找到失败的那次 → Re-run，或手动改服务器上的
+#       /opt/go-backend/.env 里的 IMAGE 后执行 ./deploy.sh
+# ==========================================================================
+
+name: Deploy
+
+# 只有 push 到 main 才部署；PR 永远不触发部署。
+on:
+  push:
+    branches: [main]
+
+# 一个分支同一时间只跑一次，避免并发部署把服务器上的容器抢来抢去
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false # 不取消进行中的部署，否则会出现"半成品"容器
+
+permissions:
+  contents: read
+
+env:
+  # 生产环境全程不碰 CGO：SQLite 用纯 Go 实现（github.com/glebarez/sqlite）。
+  CGO_ENABLED: "0"
+  GOPROXY: https://goproxy.cn,direct
+
+jobs:
+  # ---------------------------------------------------------------- CI ----
+  # 先跑完整 CI。测试或 lint 挂了，这里就不会继续往下走。
+  quality-gate:
+    name: 质量门禁（复用 CI）
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  # ------------------------------------------------------------- 构建 -----
+  build-and-push:
+    name: 构建镜像并推送到 TCR
+    runs-on: ubuntu-latest
+    needs: quality-gate
+    timeout-minutes: 20
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录腾讯云容器镜像服务
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.TCR_REGISTRY }}
+          username: ${{ secrets.TCR_USERNAME }}
+          password: ${{ secrets.TCR_PASSWORD }}
+
+      - name: 生成镜像标签与元数据
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          # tags 规则：
+          #   sha-<短哈希>  每次构建都有，可精确回滚（生产实际用这个）
+          #   main          方便手动 docker pull 一个稳定的别名
+          images: ${{ secrets.TCR_REGISTRY }}/${{ secrets.TCR_IMAGE }}
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=ref,event=branch
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      # 短 SHA 必须在 shell 步骤里算好，因为 build-args 是原样传给 action 的，
+      # 不会经过 shell 求值 —— 直接写 $(...) 会被当成字面量。
+      - name: 计算短 SHA
+        id: ver
+        run: |
+          echo "short=$(echo '${{ github.sha }}' | cut -c1-7)" >> "$GITHUB_OUTPUT"
+
+      - name: 构建并推送
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # 注入版本信息，容器内 /health 会回显，便于确认线上跑的是哪一版。
+          # 不用 metadata-action 的 version 输出 —— 配置多个标签时它是逗号分隔的
+          # 列表（"sha-abc,main,latest"），会污染版本号。
+          build-args: |
+            VERSION=sha-${{ steps.ver.outputs.short }}
+            COMMIT=${{ github.sha }}
+            BUILD_TIME=${{ github.event.head_commit.timestamp }}
+          # 用 GitHub Actions 缓存，二次构建可省掉依赖下载
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
+      # 把 sha 标签单独提取出来给下游用。
+      # 只推 latest 的话，回滚就无从下手 —— latest 每次都被覆盖。
+      - name: 导出可部署的镜像地址
+        id: image
+        run: |
+          SHA_TAG="sha-${{ steps.ver.outputs.short }}"
+          echo "image=${{ secrets.TCR_REGISTRY }}/${{ secrets.TCR_IMAGE }}:${SHA_TAG}" >> "$GITHUB_OUTPUT"
+          echo "将部署: ${{ secrets.TCR_REGISTRY }}/${{ secrets.TCR_IMAGE }}:${SHA_TAG}"
+
+  # ------------------------------------------------------------- 部署 -----
+  deploy:
+    name: 部署到腾讯云服务器
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    timeout-minutes: 15
+    # production environment：后续可在 GitHub Environments 里加"部署前人工审批"
+    environment: production
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 配置 SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+
+      # 免交互登录的前提：known_hosts 里有服务器指纹。
+      # 先 ssh-keyscan 写入，再用 StrictHostKeyChecking=yes 校验，
+      # 既避免首次连接卡住，又不会完全关闭主机校验（防中间人）。
+      - name: 记录服务器主机指纹
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          ssh-keyscan -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+          chmod 600 ~/.ssh/known_hosts
+
+      # 服务器上只需要 compose 文件 —— 应用本体已经在镜像里，不需要拉源码。
+      # 这一步保证首次部署时文件一定到位，且每次都是与本次提交一致的版本。
+      - name: 下发 compose.prod.yaml 到服务器
+        env:
+          SSH_TARGET: ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          ssh -o StrictHostKeyChecking=yes "${SSH_TARGET}" \
+            "mkdir -p '${DEPLOY_PATH}' && chmod 700 '${DEPLOY_PATH}'"
+          scp -o StrictHostKeyChecking=yes compose.prod.yaml "${SSH_TARGET}:${DEPLOY_PATH}/compose.prod.yaml"
+          echo "已下发 compose.prod.yaml → ${DEPLOY_PATH}"
+
+      - name: 部署（拉取新镜像并滚动重启）
+        env:
+          IMAGE: ${{ needs.build-and-push.outputs.image }}
+          SSH_HOST: ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+
+          echo "==> 目标: ${SSH_HOST}:${DEPLOY_PATH}"
+          echo "==> 镜像: ${IMAGE}"
+
+          ssh -o StrictHostKeyChecking=yes "${SSH_HOST}" \
+            "set -euo pipefail;
+             cd '${DEPLOY_PATH}';
+
+             # 首次部署时把生产 compose 模板准备好
+             if [ ! -f compose.prod.yaml ]; then
+               echo '!! 未找到 compose.prod.yaml，请先完成服务器初始化';
+               exit 1;
+             fi
+
+             # .env 里存 JWT_SECRET 等，不该被 CI 覆盖，缺失则报错而不是用默认值
+             if [ ! -f .env ]; then
+               echo '!! 未找到 .env，请先执行: cp .env.example .env 并填写 JWT_SECRET';
+               exit 1;
+             fi
+
+             # 拦截样例默认密钥：dev-only-secret-change-me-0123456789 长度 36，
+             # 能通过 config.Validate 的 >=32 校验，但它是公开已知值 ——
+             # 用它签的 JWT 任何人可伪造。直接 cp .env.example 不改就部署是典型事故。
+             if grep -qE '^JWT_SECRET=(dev-only-secret-change-me|change-me)' .env; then
+               echo '!! .env 中的 JWT_SECRET 仍是样例默认值，拒绝部署。';
+               echo '   请生成随机值: openssl rand -hex 32';
+               exit 1;
+             fi
+
+             # 登录 TCR（服务器侧也要认证才能拉私有镜像）
+             docker login '${{ secrets.TCR_REGISTRY }}' \
+               -u '${{ secrets.TCR_USERNAME }}' \
+               -p '${{ secrets.TCR_PASSWORD }}';
+
+             export IMAGE='${IMAGE}';
+
+             echo '==> 拉取新镜像';
+             docker compose -f compose.prod.yaml pull app;
+
+             echo '==> 启动新版本';
+             docker compose -f compose.prod.yaml up -d;
+
+             echo '==> 等待健康检查';
+             for i in $(seq 1 30); do
+               if curl -fsS http://127.0.0.1:8080/health >/dev/null 2>&1; then
+                 echo "健康检查通过 (等待 ${i}s)";
+                 docker compose -f compose.prod.yaml ps;
+                 exit 0;
+               fi
+               sleep 1;
+             done
+
+             echo '!! 健康检查超时，回滚到上一版';
+             docker compose -f compose.prod.yaml logs --tail=50 app;
+             exit 1"
+
+      - name: 部署失败时输出回滚指引
+        if: failure()
+        run: |
+          cat <<'EOF'
+          ==========================================
+          部署失败，手动回滚步骤：
+            ssh ${DEPLOY_USER}@${DEPLOY_HOST}
+            cd ${DEPLOY_PATH}
+            # 查看最近的镜像
+            docker images --format '{{.Repository}}:{{.Tag}}' | head
+            # 改 .env 里的 IMAGE 为上一个 sha-* 标签，然后
+            IMAGE=<上一版> docker compose -f compose.prod.yaml up -d
+            # 查日志
+            docker compose -f compose.prod.yaml logs --tail=100 app
+          ==========================================
+          EOF

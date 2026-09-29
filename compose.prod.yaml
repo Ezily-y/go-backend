@@ -1,0 +1,63 @@
+# ==========================================================================
+# go-backend 部署编排
+#
+# 本地验证:  docker compose build && docker compose up -d
+# 服务器部署: IMAGE=<TCR地址>:<tag> docker compose up -d   （由 deploy/deploy.sh 调用）
+#
+# 设计要点：
+#   - 镜像地址不写死，通过 IMAGE 环境变量注入。CI 构建出的 sha tag 才是要部署的，
+#     写死 :latest 会导致"回滚时不知道回滚到哪一版"。
+#   - 数据（sqlite + 上传文件）挂到宿主机目录，容器重建不丢数据。
+#   - 日志驱动限大小，避免长期运行把磁盘写满（Docker 默认 json-file 无上限）。
+# ==========================================================================
+
+services:
+  app:
+    # 必须显式提供镜像地址；未设置时直接报错退出，而不是悄悄用 latest。
+    image: ${IMAGE:?请设置 IMAGE 环境变量，例如 IMAGE=xxx.tencentcloudcr.com/go-backend:sha-abc123}
+
+    container_name: go-backend
+
+    # unless-stopped: 服务器重启后自动拉起，但手动 stop 的不会被自动启动
+    restart: unless-stopped
+
+    ports:
+      - "8080:8080"
+
+    environment:
+      # 生产必须 release：关闭 gin 调试输出、不注册 /docs 与 /openapi.json
+      APP_MODE: release
+      TZ: Asia/Shanghai
+      # JWT_SECRET 不设默认值 —— 缺失时 config.Validate() 会拒绝启动（长度需 >= 32），
+      # 这是有意的：宁可起不来，也不要跑在一个可预测的密钥上。
+      JWT_SECRET: ${JWT_SECRET:?必须在 .env 中设置 JWT_SECRET，且长度 >= 32}
+      # 可选覆盖项：不设则用 config/config.yaml 里的值
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      DB_DRIVER: ${DB_DRIVER:-sqlite}
+      DB_DSN: ${DB_DSN:-./data/app.db}
+
+    volumes:
+      # sqlite 数据库 + 上传文件都在 /app/data 下，统一挂一个卷。
+      # 用 bind mount（而非 named volume）是为了方便直接备份/查看文件。
+      - ./data:/app/data
+      - ./logs:/app/logs
+
+    healthcheck:
+      # 路径是 /health，不是 /healthz（见 internal/router/router.go）
+      # wget 来自 alpine 的 busybox，镜像里已有，不需要 curl
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+    logging:
+      driver: json-file
+      options:
+        # 单文件 10MB、最多保留 3 个，即日志最多占 30MB
+        max-size: "10m"
+        max-file: "3"
+
+    # 优雅关闭：给应用 20 秒处理完在途请求（Docker 默认 10s，可能不够）
+    stop_grace_period: 20s

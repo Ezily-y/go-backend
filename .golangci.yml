@@ -1,0 +1,128 @@
+# ==========================================================================
+# golangci-lint v2 配置（注意：v2 的 schema 与 v1 不兼容，不要照抄 v1 示例）
+# 本地:  golangci-lint run ./...
+# CI:    .github/workflows/ci.yml 的 lint 步骤
+#
+# 取舍原则：
+#   - errcheck / govet / staticcheck / ineffassign / unused 是"必修"，保持开启
+#   - gosec 在 MVP 阶段只开高危规则，避免一堆噪音劝退
+#   - 复杂度类（funlen / gocyclo / lll）只警告不阻断，用 issues 排除
+# ==========================================================================
+version: "2"
+
+linters:
+  default: standard          # 启用 golangci-lint 的"标准集"
+
+  # 在标准集之上追加的 linter
+  enable:
+    - bodyclose               # HTTP response body 必须关闭
+    - durationcheck           # 检测 time.Duration 误用（如 time.Second*2 写成 time.Second*2*1000）
+    - errorlint               # 错误包装规范：%w 与 errors.Is/As 的正确使用
+    - forcetypeassert         # 禁止裸类型断言 a.(T)，必须带 ok
+    - goconst                 # 重复字符串提为常量（阈值调高避免过度）
+    - gocritic                # 常见 bug / 性能 / 风格检查
+    - gosec                   # 安全问题扫描
+    - misspell                # 英文拼写错误
+    - mirror                  # bytes/strings 用法纠正
+    - nilerr                  # err != nil 却返回 nil 的逻辑错误
+    - noctx                   # http 请求必须带 context
+    - prealloc                # 预分配 slice 减少扩容
+    - revive                  # 静态检查（golint 的继任者）
+    - unconvert               # 冗余类型转换
+    - usestdlibvars           # 用标准库变量代替字面量（如 "GET" → http.MethodGet）
+    - whitespace              # 多余空行
+
+  disable:
+    - dupword                 # 注释里的重复单词太容易误报
+
+  settings:
+    errcheck:
+      # 必须检查返回值的函数；忽略日志/defer 这类可容忍的场景
+      check-blank: false
+      exclude-functions:
+        - (io.Closer).Close
+        - (*os.File).Close
+
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment       # 结构体内存对齐：收益小，噪音大，关闭
+
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+      disabled-checks:
+        - hugeParam            # 大结构体传值：Go 惯例可接受，不必强改指针
+        - commentedOutCode
+        - whyNoLint
+        - ifElseChain         # 链式 if/else：用 switch 更清晰但不是错误
+
+    goconst:
+      min-len: 4              # 太短的字符串不值得提常量
+      min-occurrences: 4      # 默认 3 太敏感，重复 4 次才提示
+
+    gosec:
+      excludes:
+        - G101                 # 硬编码凭据：配置文件里大量字面量会误报
+        - G104                 # 未检查的 error：与 errcheck 重叠
+      severity: medium
+
+    revive:
+      rules:
+        - name: exported
+          disabled: true       # 不强制导出符号的 doc 注释格式（本项目注释风格已统一）
+        - name: var-naming
+        - name: package-comments
+          disabled: true       # 不强制每个包写 package doc
+        - name: receiver-naming
+        - name: indent-error-flow
+        - name: unreachable-code
+        - name: redefines-builtin-id   # 禁止 shadow 内建名（len/cap/err 等）
+
+    prealloc:
+      simple: true
+      range-loops: true
+      for-loops: false
+
+  exclusions:
+    generated: lax            # 对生成文件放宽（auto-generated 头）
+    rules:
+      # 测试文件放宽：允许裸断言、忽略 error
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+          - forcetypeassert
+          - dupl
+          - prealloc
+      # 跳过 go-bindata / wire / sqlc 之类的生成代码
+      - path: '(.*)\.pb\.go$'
+        linters:
+          - all
+      # main 包里 os.Exit / log.Fatal 是正常写法
+      - path: cmd/
+        linters:
+          - gosec
+          - forbidigo
+      # 命令行工具里 log.Fatal 是可接受的
+      - path: cmd/
+        text: "SA1019|G104"
+      # JSON 序列化的 interface{} 在 gocritic 下会误报
+      - linters:
+          - gocritic
+        text: "typeAssertChain|singleCaseSwitch"
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - go-backend          # 本地包 import 分组：标准库 / 第三方 / 本项目
+
+issues:
+  max-issues-per-linter: 0    # 不截断，全部报出来
+  max-same-issues: 0
