@@ -71,10 +71,9 @@ jobs:
         run: go vet ./...
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
-          # 与本地版本保持一致，避免"本地过了 CI 没过"。
-          # golangci-lint v2 的配置 schema 与 v1 不兼容，升级时需同步改 .golangci.yml。
+          # golangci-lint v2 的配置 schema 与 v1 不兼容，action 也需要 v7+。
           version: v2.14.0
           args: --timeout=5m
 
