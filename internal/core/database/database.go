@@ -22,8 +22,8 @@ import (
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
 
-	"go-backend/internal/config"
-	"go-backend/internal/logger"
+	"go-backend/internal/core/config"
+	"go-backend/internal/core/logger"
 	"go-backend/internal/model"
 )
 

@@ -11,8 +11,8 @@ import (
 
 	"go-backend/docs"
 	"go-backend/internal/bootstrap"
-	"go-backend/internal/config"
-	"go-backend/internal/database"
+	"go-backend/internal/core/config"
+	"go-backend/internal/core/database"
 )
 
 // skipRoutes 是不需要写进 API 文档的基础设施端点：

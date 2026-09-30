@@ -17,12 +17,12 @@ find internal cmd -type f -name '*.go'
 
 | 文件 | 为什么 |
 |---|---|
-| `internal/response/response.go` | 统一响应格式，**所有接口必须走它** |
-| `internal/apperr/apperr.go` | 错误码表 + `*Error` 构造器 |
+| `internal/core/response/response.go` | 统一响应格式，**所有接口必须走它** |
+| `internal/core/apperr/apperr.go` | 错误码表 + `*Error` 构造器 |
 | `internal/model/dto/dto.go` | 请求/响应 DTO 的写法与分页约定 |
 | `internal/model/model.go` | 实体、`Role`、`TableName()` |
-| `internal/config/config.go` | 配置结构 / defaults / bindEnvs |
-| `internal/database/database.go` | `Get()`、`Migrate()`、`Ping()` |
+| `internal/core/config/config.go` | 配置结构 / defaults / bindEnvs |
+| `internal/core/database/database.go` | `Get()`、`Migrate()`、`Ping()` |
 
 ## 1. 统一响应格式（硬约束）
 
@@ -82,7 +82,7 @@ type Article struct {
 func (Article) TableName() string { return "articles" }   // 必须，避免 GORM 复数化
 ```
 
-**然后必须把 `&model.Article{}` 加进 `internal/database/database.go` 的 `Migrate()` `targets` 切片**，否则表不会建、运行时报 no such table。
+**然后必须把 `&model.Article{}` 加进 `internal/core/database/database.go` 的 `Migrate()` `targets` 切片**，否则表不会建、运行时报 no such table。
 
 ### 2.3 Handler
 
@@ -193,7 +193,7 @@ go mod tidy
 
 以新增 `app.max_upload_size` 为例，**必须同时改**：
 
-1. **结构体** `internal/config/config.go` → `AppConfig`：
+1. **结构体** `internal/core/config/config.go` → `AppConfig`：
    ```go
    MaxUploadSize int64 `mapstructure:"max_upload_size"`
    ```

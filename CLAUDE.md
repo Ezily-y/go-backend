@@ -10,16 +10,31 @@ GitHub Actions 构建 Docker 镜像推腾讯云 TCR，再 SSH 到腾讯云服务
 
 ## 目录结构
 
+`internal/` 按维度分层，便于后续新增业务模块时保持边界清晰：
+
+| 维度 | 包含 | 含义 |
+|---|---|---|
+| `core/` | config, logger, apperr, response, database, metrics | 横切基础设施，不依赖业务 |
+| `model/` | model, dto | 数据契约层 |
+| `auth/` | JWT + crypto | 安全层（依赖 model） |
+| `middleware/` | HTTP 管道 | 依赖 core + auth |
+| `handler/service/repository/` | 业务三层 | 依赖 core + auth + model |
+| `router/bootstrap/` | 路由注册 + 启动编排 | 依赖全部 |
+| `version/` | 构建信息 | **保留顶层**（`-ldflags` 硬编码路径） |
+| `docscheck/` | 文档校验 | 依赖全部 |
+
+依赖方向单向：`core` → `model` → `auth` → `middleware` → `handler/service/repository` → `router/bootstrap`。新增业务模块时，`handler/service/repository` 可按业务加子目录（如 `handler/ai/`），`core/` 不动。
+
 已存在的（**逐一验证过**）：
 
 | 路径 | 职责 |
 |---|---|
 | `cmd/server/main.go` | 程序入口 `main()`（`cmd/api/` 是空目录，不参与构建） |
-| `internal/config/config.go` | viper 配置加载：`setDefaults` → `config/config.yaml` → `bindEnvs`；`Load(path)`、`Validate()`、`Addr()` |
-| `internal/logger/logger.go` | zap 全局日志。`Initialize(Options{Level,Format,File})`，包级 `Debugf/Infof/Warnf/Errorf/Fatalf`，`Zap()` 取原始句柄，`Sync()` 退出时调用 |
-| `internal/response/response.go` | 统一 JSON 响应。`OK` / `OKWithMessage` / `Page` / `Fail` / `FailWithCode` |
-| `internal/apperr/apperr.go` | 业务错误码与 `*Error`。`New` / `NewWrap` / `BadRequest` / `Unauthorized` / `Forbidden` / `NotFound` / `Internal` / `DB` / `FromError` |
-| `internal/database/database.go` | `Connect(cfg)` 建连 + `Migrate()` + `Ping(ctx)` + `Close()`；`Get()` 返回全局 `*gorm.DB` |
+| `internal/core/config/config.go` | viper 配置加载：`setDefaults` → `config/config.yaml` → `bindEnvs`；`Load(path)`、`Validate()`、`Addr()` |
+| `internal/core/logger/logger.go` | zap 全局日志。`Initialize(Options{Level,Format,File})`，包级 `Debugf/Infof/Warnf/Errorf/Fatalf`，`Zap()` 取原始句柄，`Sync()` 退出时调用 |
+| `internal/core/response/response.go` | 统一 JSON 响应。`OK` / `OKWithMessage` / `Page` / `Fail` / `FailWithCode` |
+| `internal/core/apperr/apperr.go` | 业务错误码与 `*Error`。`New` / `NewWrap` / `BadRequest` / `Unauthorized` / `Forbidden` / `NotFound` / `Internal` / `DB` / `FromError` |
+| `internal/core/database/database.go` | `Connect(cfg)` 建连 + `Migrate()` + `Ping(ctx)` + `Close()`；`Get()` 返回全局 `*gorm.DB` |
 | `internal/model/model.go` | 实体：`User` / `APIKey` / `APILog`，`Role`（admin/editor/viewer），`NewID(n)` |
 | `internal/model/dto/dto.go` | 请求/响应 DTO：登录、用户、API Key、`PageQuery`（`Normalize()`/`Offset()`） |
 | `internal/auth/` | JWT 签发与校验（`jwt.go`）、密码哈希（`crypto.go`），含单元测试 |
@@ -29,11 +44,12 @@ GitHub Actions 构建 Docker 镜像推腾讯云 TCR，再 SSH 到腾讯云服务
 | `internal/service/` | 业务逻辑层：`user.go`、`apikey.go` |
 | `internal/repository/` | 数据访问层：`repository.go`（基础封装）、`user.go`、`apikey.go` |
 | `internal/bootstrap/bootstrap.go` | 首启自动创建管理员账号 |
-| `internal/metrics/metrics.go` | Prometheus 指标定义与 HTTP handler |
+| `internal/core/metrics/metrics.go` | Prometheus 指标定义与 HTTP handler |
 | `internal/version/version.go` | 构建期通过 `-ldflags` 注入的版本/commit/时间信息 |
 | `internal/docscheck/drift_test.go` | 文档与代码一致性检查 |
 | `docs/` | OpenAPI spec 与 Scalar UI（运行时构造，无生成步骤），含 `smoke_test.go` |
 | `config/config.yaml` | 非敏感配置文件 |
+| `memory/` | **踩坑记录**（随仓库走）。新经验写这里，索引见 `memory/README.md` |
 
 目录已建但**当前为空**：
 
@@ -57,7 +73,7 @@ make help                 # 查看 Makefile 全部目标（需安装 make）
 ```
 
 - 配置文件默认读 `config/config.yaml`（相对 cwd），可用 `CONFIG_PATH` 环境变量换路径，也可用 `-c` 标志指定。
-- 环境变量覆盖配置（键名固定，见 `internal/config/config.go` 的 `bindEnvs`）：
+- 环境变量覆盖配置（键名固定，见 `internal/core/config/config.go` 的 `bindEnvs`）：
   `APP_NAME` `APP_MODE` `APP_PORT` `APP_UPLOAD_DIR` `APP_CORS_ORIGINS`（逗号分隔）
   `JWT_SECRET` `JWT_ACCESS_TTL` `JWT_REFRESH_TTL`
   `LOG_LEVEL` `LOG_FORMAT` `LOG_FILE`
@@ -79,7 +95,7 @@ make help                 # 查看 Makefile 全部目标（需安装 make）
 后者覆盖前者，所以**环境变量优先级最高**。`Validate()` 不通过直接返回 error，启动即失败。
 
 新增配置项必须**同时改四处**，缺一处就是"配置不生效"：
-1. `internal/config/config.go` 的 `Config` 结构体（`mapstructure` 标签）
+1. `internal/core/config/config.go` 的 `Config` 结构体（`mapstructure` 标签）
 2. 同文件 `setDefaults()` 里的 `v.SetDefault(...)`
 3. 同文件 `bindEnvs()` 里的 `[2]string{"ENV_NAME", "config.key"}`
 4. `config/config.yaml` 加同名键（带注释）
@@ -88,7 +104,7 @@ make help                 # 查看 Makefile 全部目标（需安装 make）
 **`app.jwt.secret` 长度必须 >= 32**、`refresh_ttl >= access_ttl`、
 `database.driver ∈ {sqlite,postgres}`、`log.level ∈ {debug,info,warn,error}`。
 
-### 统一响应格式（`internal/response`）
+### 统一响应格式（`internal/core/response`）
 
 ```json
 {"code": 0, "message": "success", "data": {}}
@@ -100,7 +116,7 @@ make help                 # 查看 Makefile 全部目标（需安装 make）
   **5xx 只对外返回 `"服务器内部错误"`**，真实原因必须写进服务端日志，不要自己 `c.JSON` 拼错误。
 - 禁止绕过本包直接 `c.JSON(http.StatusOK, gin.H{...})` —— 前端按 `code` 字段分支。
 
-### 错误处理（`internal/apperr`）
+### 错误处理（`internal/core/apperr`）
 
 错误码 = `HTTP状态码 * 1000 + 序号`，`code/1000` 即 HTTP 状态（`httpFromCode`）。
 `code == 0` 成功，非 0 一律失败。
@@ -134,7 +150,7 @@ if err := repo.Save(u); err != nil {
 `*Error` 实现了 `Unwrap()`，`errors.Is` / `errors.As` 能穿透。
 未知错误一律降级为 `CodeUnknown(500000)`，避免泄漏 SQL/堆栈。
 
-### 日志（`internal/logger`）
+### 日志（`internal/core/logger`）
 
 ```go
 logger.Infof("用户登录: user=%s ip=%s", name, ip)   // 常规
@@ -148,7 +164,7 @@ logger.Zap().Info("request", zap.String("path", "/api/v1/users"))  // 强类型�
 - 启动时必须调一次 `logger.Initialize(...)`，退出时 `defer logger.Sync()`。
 - 不要在业务代码里 `fmt.Println`。
 
-### 数据库（`internal/database`）
+### 数据库（`internal/core/database`）
 
 - `database.Connect(cfg)` 完成建连 + 连通性 Ping + `Migrate()`，失败直接返回 error，调用方应当 `Fatalf`。
 - `database.Get()` 拿 `*gorm.DB`；**未初始化时会 panic**，只能在 `Connect` 之后调用。
@@ -225,3 +241,6 @@ logger.Zap().Info("request", zap.String("path", "/api/v1/users"))  // 强类型�
 5. （原为"只改 `.claude/` 和 `CLAUDE.md`"，适用于之前与其他进程并行写入的会话，当前已无此限制。）
 6. 提交前跑：`gofmt -l .`（应无输出）→ `go vet ./...` → `go test ./...`。
 7. 本机是 Windows 11 + Git Bash，shell 命令按 POSIX 写（`/dev/null` 不是 `NUL`，正斜杠路径）。
+8. **踩坑经验与重要记忆写进项目内的 [`memory/`](memory/)**（一个主题一个 md，`memory/README.md` 维护索引），
+   不要只写本机 `~/.claude/projects/.../memory/` —— 那个目录不进 git，换机器/换人就丢。
+   README 的「从改代码到上线（完整流程）」「踩坑记录」两节由这条约定维持，改动部署链路时同步更新。

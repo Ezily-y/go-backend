@@ -183,5 +183,5 @@ git push origin main             # 触发 CI/CD 重新部署
 - **不要 `docker push :latest` 到生产** —— 生产用 sha tag；`latest` 无法回滚到确定版本。
 - **不要 `git push --force` 到 `main`**（已在项目级权限 `deny` 里拦掉）。
 - **不要把 `JWT_SECRET` 写进 `config/config.yaml`** —— 该文件会被提交。
-- 不要在日志里打印 DSN、密钥、token；`internal/response` 的 5xx 已经只对外给通用文案，别在 handler 里自己泄漏。
+- 不要在日志里打印 DSN、密钥、token；`internal/core/response` 的 5xx 已经只对外给通用文案，别在 handler 里自己泄漏。
 - 不要在 `.claude/settings.json` 的 `env` 字段里放任何真实凭证。

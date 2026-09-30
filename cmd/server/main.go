@@ -19,9 +19,9 @@ import (
 	"time"
 
 	"go-backend/internal/bootstrap"
-	"go-backend/internal/config"
-	"go-backend/internal/database"
-	"go-backend/internal/logger"
+	"go-backend/internal/core/config"
+	"go-backend/internal/core/database"
+	"go-backend/internal/core/logger"
 	"go-backend/internal/version"
 )
 

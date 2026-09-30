@@ -14,14 +14,14 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"go-backend/docs"
-	"go-backend/internal/apperr"
+	"go-backend/internal/core/apperr"
 	"go-backend/internal/auth"
-	"go-backend/internal/config"
+	"go-backend/internal/core/config"
 	"go-backend/internal/handler"
-	"go-backend/internal/logger"
-	"go-backend/internal/metrics"
+	"go-backend/internal/core/logger"
+	"go-backend/internal/core/metrics"
 	"go-backend/internal/middleware"
-	"go-backend/internal/response"
+	"go-backend/internal/core/response"
 	"go-backend/internal/service"
 )
 

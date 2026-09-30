@@ -6,8 +6,8 @@ import (
 
 	"gorm.io/gorm"
 
-	"go-backend/internal/apperr"
-	"go-backend/internal/database"
+	"go-backend/internal/core/apperr"
+	"go-backend/internal/core/database"
 	"go-backend/internal/model"
 	"go-backend/internal/model/dto"
 )

@@ -17,9 +17,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
-	"go-backend/internal/apperr"
-	"go-backend/internal/logger"
-	"go-backend/internal/response"
+	"go-backend/internal/core/apperr"
+	"go-backend/internal/core/logger"
+	"go-backend/internal/core/response"
 )
 
 // ContextKey 请求上下文中存放键的类型。

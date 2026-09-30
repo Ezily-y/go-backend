@@ -7,8 +7,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"go-backend/internal/database"
-	_ "go-backend/internal/response"
+	"go-backend/internal/core/database"
+	_ "go-backend/internal/core/response"
 	"go-backend/internal/version"
 )
 

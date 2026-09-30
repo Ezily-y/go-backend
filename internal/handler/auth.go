@@ -16,11 +16,11 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"go-backend/internal/apperr"
+	"go-backend/internal/core/apperr"
 	"go-backend/internal/middleware"
 	_ "go-backend/internal/model"
 	"go-backend/internal/model/dto"
-	"go-backend/internal/response"
+	"go-backend/internal/core/response"
 	"go-backend/internal/service"
 )
 

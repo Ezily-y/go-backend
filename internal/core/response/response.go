@@ -13,7 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"go-backend/internal/apperr"
+	"go-backend/internal/core/apperr"
 )
 
 // Body 统一响应体。

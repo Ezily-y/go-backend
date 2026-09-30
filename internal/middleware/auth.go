@@ -11,9 +11,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"golang.org/x/time/rate"
 
-	"go-backend/internal/apperr"
+	"go-backend/internal/core/apperr"
 	"go-backend/internal/auth"
-	"go-backend/internal/response"
+	"go-backend/internal/core/response"
 )
 
 // ---- JWT 认证 ----

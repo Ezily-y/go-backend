@@ -22,6 +22,8 @@
 - [数据库](#数据库)
 - [配置管理](#配置管理)
 - [部署](#部署)
+- [从改代码到上线（完整流程）](#从改代码到上线完整流程)
+- [踩坑记录](#踩坑记录)
 - [常见问题排查](#常见问题排查)
 
 ---
@@ -38,7 +40,7 @@
 | 数据计算引擎 | ⏳ | Asynq 任务队列、进度 SSE 推送 |
 | 实时通信 | ⏳ | WebSocket 推送、事件总线 |
 
-⏳ 为二期计划，代码中已预留 `internal/config` 的 Redis 配置与 `model.APILog` 表。
+⏳ 为二期计划，代码中已预留 `internal/core/config` 的 Redis 配置与 `model.APILog` 表。
 
 ---
 
@@ -64,14 +66,23 @@
 ### 前置要求
 
 - Go 1.26.0+（`go version` 确认）
-- Make（可选，也可以用原生命令）
+- Make（可选；本机没装的话直接用下面的原生命令）
+
+### 克隆仓库
+
+```bash
+git clone git@github.com:Ezily-y/go-backend.git && cd go-backend
+go mod tidy
+```
+
+> 没配 SSH key 就改用 HTTPS：`git clone https://github.com/Ezily-y/go-backend.git`
 
 ### 三步启动
 
 ```bash
 # 1. 启动服务（默认 SQLite，零外部依赖）
 make run
-# 或
+# 或（本机没装 make 时）
 go run ./cmd/server -c config/config.yaml
 
 # 2. 验证健康检查
@@ -224,6 +235,9 @@ go-backend/
 ├── config/
 │   └── config.yaml                 # 非敏感配置文件
 ├── deploy/                         # 部署相关文件
+│   ├── deploy.sh                   # 服务器上执行的部署脚本（CI scp 下发）
+│   └── server-setup.sh             # 新服务器一次性初始化（装 Docker、建目录、生成 .env）
+├── memory/                         # 踩坑记录（随仓库走，新经验写这里）
 ├── .github/
 │   └── workflows/
 │       ├── ci.yml                  # CI：gofmt → go vet → golangci-lint → build → test
@@ -371,7 +385,7 @@ go-backend/
 | `500004` | 500 | 文件上传失败 |
 | `503000` | 503 | 服务暂时不可用 |
 
-完整定义见 [internal/apperr/apperr.go](internal/apperr/apperr.go)。
+完整定义见 [internal/core/apperr/apperr.go](internal/core/apperr/apperr.go)。
 
 ---
 
@@ -860,6 +874,312 @@ docker compose -f compose.prod.yaml logs --tail=100 app
 
 ---
 
+## 从改代码到上线（完整流程）
+
+> 写给第一次接触 CI/CD 的人。整条链路只需要你记住一句话：
+>
+> **改代码 → 本地跑通 → `git add` → `git commit` → `git push` → 剩下的全自动。**
+>
+> 下面把"剩下的全自动"拆开讲清楚，这样挂了你知道去哪看。
+
+### 0. 全景图
+
+```
+┌─────────────┐  push   ┌──────────────────────────────┐  拉镜像  ┌────────────────┐
+│  你的电脑     │ ─────▶ │  GitHub Actions               │ ─────▶ │  腾讯云服务器     │
+│             │         │                              │        │                │
+│ · 改代码     │         │ ① CI（质量门禁）               │        │ ④ docker compose│
+│ · 本地自测   │         │   gofmt → vet → lint          │        │    pull 新镜像  │
+│ · git commit│         │   → build → test             │        │    重启容器     │
+│ · git push  │         │   任一步失败 ⇒ 整条流水线停止   │        │    等 /health  │
+│             │         │                              │        │                │
+└─────────────┘         │ ② 构建 Docker 镜像            │        │    数据持久化在  │
+                        │ ③ 推送到腾讯云 TCR 镜像仓库     │        │    ./data 目录  │
+                        └──────────────────────────────┘        └────────────────┘
+```
+
+**关键点：你只做 `git push` 这一个动作，剩下的全自动。**
+
+- 测试没过 → 停在 ①，**生产环境一个字节都不会被碰到**
+- 测试过了 → 自动构建镜像 → 自动推到 TCR → 自动 SSH 到服务器滚动重启
+- 每个镜像都带 `sha-<7位哈希>` 标签，随时可以精确回滚到任意一次提交
+
+三份文件负责整条链：
+
+| 文件 | 干什么 |
+|---|---|
+| [.github/workflows/ci.yml](.github/workflows/ci.yml) | 质量门禁：格式 / 静态检查 / Lint / 编译 / 测试 |
+| [.github/workflows/deploy.yml](.github/workflows/deploy.yml) | 先跑上面那份 CI，过了才构建镜像并部署 |
+| [deploy/deploy.sh](deploy/deploy.sh) | 真正在服务器上执行的部署脚本（由 workflow scp 下发） |
+
+---
+
+### 1. 第一次准备（只做一次）
+
+#### 1.1 腾讯云侧
+
+**a) 开通容器镜像服务 TCR，建一个命名空间和仓库**
+
+控制台 → 容器镜像服务 → 镜像仓库 → 新建命名空间（如 `my-ns`）→ 新建私有仓库 `go-backend`。
+记下三样东西：**公网访问地址**、**访问凭证用户名**、**访问凭证密码**。
+
+> TCR 的用户名密码是**独立生成的一套**，不是腾讯云账号密码，也不是 SecretId/SecretKey。
+
+**b) 一次性初始化服务器**
+
+```bash
+# 本机执行：把初始化脚本传上去
+scp deploy/server-setup.sh ubuntu@<服务器IP>:/tmp/
+
+# 服务器上执行（装 Docker、配镜像加速、建部署目录、生成 .env 模板）
+ssh ubuntu@<服务器IP> 'sudo bash /tmp/server-setup.sh'
+```
+
+脚本会装好 Docker + compose 插件、配置腾讯云内网镜像加速、创建 `/opt/go-backend`，
+并生成一份 `.env` 模板。**它不覆盖已有 `.env`，可以重复执行。**
+
+**c) 填服务器密钥（必须做，否则部署会被拒绝）**
+
+```bash
+ssh ubuntu@<服务器IP>
+cd /opt/go-backend
+nano .env                 # 把 JWT_SECRET 填上
+# 生成随机值：openssl rand -hex 32
+```
+
+> `JWT_SECRET` 长度必须 ≥ 32，而且**不能**是 `.env.example` 里的
+> `dev-only-secret-change-me-0123456789`（公开已知值，谁都能伪造你的登录态）。
+> `deploy/deploy.sh` 会检测到样例值直接拒绝部署 —— 这是故意的。
+>
+> 这个密钥**只存在服务器的 `.env` 里**，不进 GitHub、不进代码、不进 git。
+
+**d) 云安全组放行 8080 端口**
+
+腾讯云控制台 → 防火墙/安全组 → 添加规则 → TCP 8080。
+`server-setup.sh` 只管本机 ufw，**管不到云控制台的安全组**，这一步必须手动。
+
+**e) 生成一把专用 SSH 密钥**
+
+```bash
+# 本机执行（如果还没有专用密钥）
+ssh-keygen -t ed25519 -f ~/.ssh/go-backend-deploy -N "" -C "go-backend-deploy"
+
+# 把公钥装到服务器，让 CI 能免密登录
+cat ~/.ssh/go-backend-deploy.pub >> ~/.ssh/authorized_keys   # 在服务器上执行
+```
+
+> 用**专用**密钥，别拿日常那把 —— 私钥全文要贴进 GitHub Secrets，
+> 泄露时只废这一把，不影响你平时登录。
+
+#### 1.2 GitHub 侧
+
+仓库 → **Settings → Secrets and variables → Actions → New repository secret**。
+名字必须**一字不差**，`deploy.yml` 就是按这些名字取值的：
+
+| Secret | 值 | 从哪拿 |
+|---|---|---|
+| `TCR_REGISTRY` | `ccr.ccs.tencentyun.com/<命名空间>` | TCR 控制台"公网访问地址"，**不带 `https://`、不带尾 `/`** |
+| `TCR_IMAGE` | `go-backend` | TCR 仓库名 |
+| `TCR_USERNAME` | TCR 访问凭证用户名 | TCR 控制台"访问凭证"页 |
+| `TCR_PASSWORD` | TCR 访问凭证密码 | 同上 |
+| `DEPLOY_HOST` | 服务器公网 IP | 腾讯云控制台 |
+| `DEPLOY_USER` | 登录用户名 | 轻量服务器一般 `ubuntu`，CVM 看镜像 |
+| `DEPLOY_SSH_KEY` | **私钥全文** | `cat ~/.ssh/go-backend-deploy`（注意是私钥，不是 `.pub`） |
+| `DEPLOY_PATH` | `/opt/go-backend` | 与 `server-setup.sh` 一致 |
+
+> **`JWT_SECRET` 不是 GitHub Secret。** 它在服务器的 `.env` 里。
+> CI 只负责把镜像推上去再重启容器，从头到尾拿不到应用密钥。
+
+**粘贴私钥时注意**：Windows Git Bash 里直接 `cat` 会因为 MSYS 路径转换出问题，
+用 stdin 传更稳：
+
+```bash
+printf '%s' "$(cat ~/.ssh/go-backend-deploy)" | gh secret set DEPLOY_SSH_KEY
+# 或在网页上手动粘贴，确保首尾的 -----BEGIN/END OPENSSH PRIVATE KEY----- 都在
+```
+
+#### 1.3 验证一切就绪
+
+```bash
+# 本机
+docker info                          # Docker Desktop 得开着
+git remote -v                        # 确认是 git@github.com:Ezily-y/go-backend.git
+git status                           # 确认在 main 分支
+gh secret list                       # 确认 8 个 Secret 都在
+```
+
+---
+
+### 2. 日常开发循环（每次都走这个）
+
+#### 步骤一：切个分支（可选但推荐）
+
+```bash
+git checkout -b feat/xxx     # 改功能
+git checkout -b fix/yyy      # 修 bug
+```
+
+> 不想用分支、直接在 `main` 上改也行 —— 但 `push main` 就**会直接部署到生产**。
+> 想先看效果再上线，就开分支提 PR，PR 合并进 `main` 时才触发部署。
+
+#### 步骤二：改代码
+
+新增接口 / 加配置项 / 写测试，按项目约定走（详见 [CLAUDE.md](CLAUDE.md)）。
+几个必踩的约定：
+
+- 新增配置项要**同时改四处**（结构体 / `setDefaults` / `bindEnvs` / `config.yaml`），少一处就是配置不生效。
+- 新增数据库实体必须加进 `database.Migrate()` 的 `targets`，否则表不会建。
+- 统一响应用 `response.OK` / `response.Fail`，不要自己 `c.JSON` 拼。
+
+#### 步骤三：本地自测（**别跳过**，这一步能挡掉 90% 的 CI 失败）
+
+```bash
+gofmt -l .          # 必须无输出；有输出就 gofmt -w -s .
+go vet ./...        # 静态分析
+go test ./...       # 跑测试（不要加 -race，本机不支持）
+go build ./...      # 确认能编译
+```
+
+然后起服务看一眼：
+
+```bash
+go run ./cmd/server
+# 另开一个终端
+curl http://localhost:8080/health     # 注意是 /health，不是 /healthz
+```
+
+> 本机（Windows）**没装 make 和 golangci-lint**，直接敲上面这些原始 go 命令。
+> `golangci-lint` 由 CI 在 Linux 上跑，规则在 [.golangci.yml](.golangci.yml)（v2 schema）。
+
+#### 步骤四：提交
+
+```bash
+git add -A
+git status                      # 先看清楚要提交什么
+git commit -m "feat(xxx): 一句话说清做了什么"
+```
+
+commit message 用 `feat:` / `fix:` / `docs:` / `refactor:` / `chore:` 开头 + 中文描述，
+说清**为什么这么改**，别只写"改了代码"。
+
+> `.env`、`data/`、`logs/` 已在 [.gitignore](.gitignore) 里，不会被带进仓库。
+> 提交前 `git status` 扫一眼，**确认没有密钥类文件**。
+
+#### 步骤五：推送
+
+```bash
+git push origin main            # 或 git push origin feat/xxx
+```
+
+**到这里你的活就干完了。** 剩下的全自动。
+
+---
+
+### 3. 推送之后发生什么
+
+去 GitHub → 仓库 → **Actions** 标签页，能看到两条流水线在跑：
+
+```
+CI       ─── gofmt → go vet → golangci-lint → go build → go test
+Deploy   ─── 质量门禁(复用上面那条 CI) → 构建镜像 → 推 TCR → SSH 部署
+```
+
+点进去能看每一步的实时日志。
+
+**成功的标志**：
+
+1. 两条流水线都是绿色 ✅
+2. Deploy 的"部署"步骤打印出 `健康检查通过 (等待 Ns)`
+3. 本机验证一下：
+
+```bash
+# 直接访问（如果 8080 对外开放）
+curl http://<服务器IP>:8080/health
+
+# 或者 SSH 上去查本机
+ssh ubuntu@<服务器IP> 'curl -s http://127.0.0.1:8080/health'
+```
+
+`version` 字段会回显 `sha-xxxxxxx`，**和你这次提交的短哈希一致**就说明线上跑的确实是新版本。
+
+**挂了怎么办**：
+
+| 现象 | 去哪看 | 常见原因 |
+|---|---|---|
+| CI 红了 | Actions → CI → 红色那步的日志 | 格式没格式化、测试没过、lint 报错 |
+| 构建红了 | Deploy → "构建镜像"步骤 | Dockerfile 写错、依赖拉不下来 |
+| 推镜像红了 | 同上，`docker login` 那步 | TCR 用户名/密码 Secret 填错 |
+| 部署红了 | Deploy → "部署"步骤 | SSH 连不上、`.env` 缺失、JWT_SECRET 是样例值 |
+| 部署成功但服务没起来 | SSH 上去 `docker compose -f compose.prod.yaml logs --tail=100 app` | 看下面[踩坑记录](#踩坑记录) |
+
+> **注意**：CI 失败时 Deploy 根本不会往下走（`needs: quality-gate`），
+> 所以 CI 红了 = 生产没被碰过，放心修完再推。
+
+---
+
+### 4. 回滚
+
+线上出问题不用回滚代码，回滚**镜像**即可（几十秒）：
+
+```bash
+ssh ubuntu@<服务器IP>
+cd /opt/go-backend
+
+# 看历史镜像
+docker images --format '{{.Repository}}:{{.Tag}}' | head
+
+# IMAGE 由 deploy.sh 写进 .env；改成上一个 sha-* 标签
+nano .env                      # IMAGE=ccr.ccs.tencentyun.com/my-ns/go-backend:sha-上一版
+docker compose -f compose.prod.yaml pull app
+docker compose -f compose.prod.yaml up -d
+
+# 看日志确认
+docker compose -f compose.prod.yaml logs --tail=100 app
+```
+
+每个镜像都带 `sha-<7位哈希>` 标签（不是只有 `latest`），就是为了这一步能精确定位。
+嫌 SSH 麻烦，也可以去 GitHub → Actions → 找到上次成功的那次 → **Re-run jobs** 重新部署。
+
+---
+
+### 5. 常用运维命令速查
+
+```bash
+# —— 服务器上 ——
+cd /opt/go-backend
+docker compose -f compose.prod.yaml ps          # 容器状态（看 healthy）
+docker compose -f compose.prod.yaml logs -f app # 跟踪日志
+docker compose -f compose.prod.yaml restart app # 只重启不换镜像
+docker compose -f compose.prod.yaml down        # 停掉
+docker exec -it go-backend sh                   # 进容器内部
+
+# —— 本机 ——
+gh run list                 # 看最近的 CI/Deploy 运行结果
+gh run view <run-id> --log   # 看某次运行的完整日志
+gh secret list               # 看已配置的 Secrets
+git log --oneline -10        # 看最近提交
+```
+
+---
+
+## 踩坑记录
+
+项目自带的踩坑笔记在 [`memory/`](memory/) 目录，**随仓库一起走**，换机器、换人都不会丢。
+完整的排查手册见 [memory/README.md](memory/README.md)。
+
+最常踩的三条（详细根因与修法看对应文件）：
+
+| 坑 | 症状 | 一句话修法 |
+|---|---|---|
+| MSYS 路径转换 | `DEPLOY_PATH` 存成了 `D:/MySoftwares/Git/opt/...`，服务器文件全落错地方 | 用 `MSYS_NO_PATHCONV=1`，或 `printf '%s' '/path' \| gh secret set` 走 stdin |
+| job outputs 含 secret | compose 报 `required variable IMAGE is missing` | 不跨 job 传镜像地址，deploy job 内用 env 自己拼 |
+| bind mount 属主 | SQLite 报 `unable to open database file: out of memory (14)` | `chown -R 100:101 data logs`（`deploy.sh` 已自动做） |
+
+> 完整版在 [memory/deploy-pipeline-gotchas.md](memory/deploy-pipeline-gotchas.md) 和
+> [memory/windows-gitbash-pitfalls.md](memory/windows-gitbash-pitfalls.md)。
+
+---
+
 ## 中间件顺序
 
 ```
@@ -959,29 +1279,6 @@ make build-linux
 
 ---
 
-## 本地开发快速启动
-
-```bash
-# 1. 克隆仓库
-git clone git@github.com:Ezily-y/go-backend.git && cd go-backend
-
-# 2. 整理依赖
-go mod tidy
-
-# 3. 启动服务（默认 SQLite）
-make run
-
-# 4. 另一个终端：登录
-curl -X POST http://localhost:8080/api/v1/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"admin","password":"admin123456"}'
-
-# 5. 保存 access_token，后续请求使用
-TOKEN="<从上一步获取的 access_token>"
-curl http://localhost:8080/api/v1/auth/me -H "Authorization: Bearer $TOKEN"
-```
-
----
 
 ## License
 

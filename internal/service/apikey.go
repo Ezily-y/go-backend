@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"go-backend/internal/apperr"
+	"go-backend/internal/core/apperr"
 	"go-backend/internal/auth"
 	"go-backend/internal/model"
 	"go-backend/internal/model/dto"

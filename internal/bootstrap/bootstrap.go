@@ -11,12 +11,12 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"go-backend/internal/apperr"
+	"go-backend/internal/core/apperr"
 	"go-backend/internal/auth"
-	"go-backend/internal/config"
-	"go-backend/internal/database"
+	"go-backend/internal/core/config"
+	"go-backend/internal/core/database"
 	"go-backend/internal/handler"
-	"go-backend/internal/logger"
+	"go-backend/internal/core/logger"
 	"go-backend/internal/model"
 	"go-backend/internal/repository"
 	"go-backend/internal/router"
