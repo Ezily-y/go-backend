@@ -58,7 +58,7 @@ func run() int {
 	}
 
 	// 2. 日志：之后的所有错误都走 zap。
-	if err := logger.Initialize(logger.Options{
+	if err = logger.Initialize(logger.Options{
 		Level:  cfg.Log.Level,
 		Format: cfg.Log.Format,
 		File:   cfg.Log.File,
