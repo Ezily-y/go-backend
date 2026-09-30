@@ -52,10 +52,10 @@ jobs:
     runs-on: ubuntu-latest
     needs: quality-gate
     timeout-minutes: 20
-    outputs:
-      # 注意 step id 是 image，不是 meta（meta 是 metadata-action，
-      # 没有 image 输出；写错会让下游拿到空镜像地址）。
-      image: ${{ steps.image.outputs.image }}
+    # 这里曾有 outputs.image 供 deploy job 使用，但值里含 TCR_REGISTRY 这个
+    # secret —— GitHub Actions 检测到 job output 含 secret 会整条清空，
+    # 下游拿到的是空串，compose 直接报 required variable IMAGE is missing。
+    # 改为 deploy job 内部自行拼装（见下方 IMAGE 的组装步骤），不再跨 job 传递。
 
     steps:
       - name: 检出代码
@@ -166,9 +166,23 @@ jobs:
       # 不要再写回内联 ssh "..." 的形式：那要求整段脚本嵌在双引号里，
       # 本地 bash 会先解析 $(seq ...)、"${i}"、括号与注释，实际在 runner
       # 就报 `syntax error near unexpected token '('`，命令到不了服务器。
+      - name: 组装镜像地址
+        id: image
+        env:
+          GH_SHA: ${{ github.sha }}
+          TCR_REGISTRY: ${{ secrets.TCR_REGISTRY }}
+          TCR_IMAGE: ${{ secrets.TCR_IMAGE }}
+        # 不走 needs.*.outputs（含 secret 会被 GitHub 清空），直接在本 job 内拼。
+        # 镜像地址与 build-and-push 推上去的完全一致：registry/repo:sha-<7位短哈希>。
+        run: |
+          set -euo pipefail
+          SHORT="$(echo "${GH_SHA}" | cut -c1-7)"
+          echo "image=${TCR_REGISTRY}/${TCR_IMAGE}:sha-${SHORT}" >> "$GITHUB_OUTPUT"
+          echo "将部署: ${TCR_REGISTRY}/${TCR_IMAGE}:sha-${SHORT}"
+
       - name: 部署（拉取新镜像并滚动重启）
         env:
-          IMAGE: ${{ needs.build-and-push.outputs.image }}
+          IMAGE: ${{ steps.image.outputs.image }}
           SSH_TARGET: ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
           TCR_REGISTRY: ${{ secrets.TCR_REGISTRY }}
