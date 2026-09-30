@@ -131,10 +131,14 @@ func metricsMiddleware() gin.HandlerFunc {
 
 // registerDocs 挂载 API 文档：Scalar UI + OpenAPI 3.1 spec。
 //
-// 生产环境（APP_MODE=release）不注册，避免暴露接口细节。
+// 是否注册只看 app.docs_enabled，与 app.mode 解耦：
+//   - mode=debug/test 且未显式关闭 → 开（本地开发即开即用）
+//   - mode=release → 默认关，避免暴露接口结构；确需对外用 DOCS_ENABLED=true 打开
+//
 // spec 由 docs 包在运行时构造（手写 Go struct），无生成步骤、无外部工具依赖。
 func registerDocs(e *gin.Engine, cfg *config.Config) {
-	if cfg.App.Mode == "release" {
+	if !cfg.App.DocsEnabled {
+		logger.Debugf("API 文档已关闭（app.docs_enabled=false），如需开启设置 DOCS_ENABLED=true")
 		return
 	}
 	e.GET("/docs", gin.WrapF(docs.UIHandler()))

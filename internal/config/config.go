@@ -30,11 +30,15 @@ type Config struct {
 
 // AppConfig 应用自身的基础配置。
 type AppConfig struct {
-	Name        string        `mapstructure:"name"`
-	Mode        string        `mapstructure:"mode"` // debug | release | test
-	Port        int           `mapstructure:"port"`
-	UploadDir   string        `mapstructure:"upload_dir"`
-	CORSOrigins []string      `mapstructure:"cors_origins"`
+	Name        string   `mapstructure:"name"`
+	Mode        string   `mapstructure:"mode"` // debug | release | test
+	Port        int      `mapstructure:"port"`
+	UploadDir   string   `mapstructure:"upload_dir"`
+	CORSOrigins []string `mapstructure:"cors_origins"`
+	// DocsEnabled 控制 /docs 与 /openapi.json 是否注册，与 Mode 解耦。
+	// 文档暴露接口结构，生产默认关闭；确需对外时用环境变量 DOCS_ENABLED=true 单独打开，
+	// 不必为了文档把整个 app.mode 退回 debug（那会连带开 gin 调试输出、改日志格式）。
+	DocsEnabled bool          `mapstructure:"docs_enabled"`
 	JWT         JWTConfig     `mapstructure:"jwt"`
 	Bootstrap   BootstrapConf `mapstructure:"bootstrap"`
 }
@@ -121,6 +125,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("app.port", 8080)
 	v.SetDefault("app.upload_dir", "./data/uploads")
 	v.SetDefault("app.cors_origins", []string{"*"})
+	// 默认跟随 mode：非 release 开、release 关，避免文档在生产意外暴露。
+	v.SetDefault("app.docs_enabled", true)
 	v.SetDefault("app.jwt.secret", "dev-only-secret-change-me-0123456789")
 	v.SetDefault("app.jwt.access_ttl", 2*time.Hour)
 	v.SetDefault("app.jwt.refresh_ttl", 168*time.Hour)
@@ -155,6 +161,7 @@ func bindEnvs(v *viper.Viper) {
 		{"APP_PORT", "app.port"},
 		{"APP_UPLOAD_DIR", "app.upload_dir"},
 		{"APP_CORS_ORIGINS", "app.cors_origins"}, // 逗号分隔
+		{"DOCS_ENABLED", "app.docs_enabled"},
 		{"JWT_SECRET", "app.jwt.secret"},
 		{"JWT_ACCESS_TTL", "app.jwt.access_ttl"},
 		{"JWT_REFRESH_TTL", "app.jwt.refresh_ttl"},

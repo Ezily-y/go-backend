@@ -69,7 +69,7 @@ make help                 # 查看 Makefile 全部目标（需安装 make）
   ```
 - 本机工具链：go 1.26.0（windows/386） / git 2.47 / gh 2.65；**golangci-lint 未安装**，**make 未安装**。`Makefile` 供 CI 与装了 make 的机器用，本地直接敲原始 go 命令。docker daemon 默认未启动。
 - 仓库根有 `.golangci.yml` 时（当前已有，**v2** schema，与 v1 不兼容），本地跑 `golangci-lint run` 与 CI 用同一套规则。
-- API 文档路由：`/docs`（Scalar UI）、`/openapi.json`（spec）。生产模式（`APP_MODE=release`）不注册。
+- API 文档路由：`/docs`（Scalar UI）、`/openapi.json`（spec）。是否注册由 **`app.docs_enabled`** 决定，与 `app.mode` 解耦：本地默认开；生产 `compose.prod.yaml` 传 `DOCS_ENABLED=false` 关闭，需要时用环境变量单独打开（不要为此把 mode 退回 debug）。
 
 ## 架构约定
 

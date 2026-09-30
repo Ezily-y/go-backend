@@ -382,7 +382,10 @@ go-backend/
 - **Scalar UI**：`http://localhost:8080/docs`
 - **OpenAPI 3.1 Spec**：`http://localhost:8080/openapi.json`
 
-> `APP_MODE=release` 时以上路由不注册，避免暴露接口细节。
+> 由 `app.docs_enabled` 单独控制，与 `app.mode` 解耦（默认开）。
+> 生产 `compose.prod.yaml` 传 `DOCS_ENABLED=false` 默认关闭，避免暴露接口结构；
+> 需要临时对外展示时在服务器 `.env` 加 `DOCS_ENABLED=true` 即可，
+> 不必把 `APP_MODE` 退回 `debug`（那会连带开 gin 调试输出、改日志格式）。
 
 ### 公开接口（无需鉴权）
 
@@ -816,7 +819,8 @@ docker compose -f compose.prod.yaml up -d
 
 生产环境要点：
 
-- `APP_MODE=release`（关闭调试输出、不注册 `/docs` 与 `/openapi.json`）
+- `APP_MODE=release`（关闭 gin 调试输出）
+- `DOCS_ENABLED=false`（`compose.prod.yaml` 默认值，不注册 `/docs` 与 `/openapi.json`）
 - `JWT_SECRET` 必须通过 `.env` 设置（部署脚本会拦截默认密钥）
 - `LOG_FORMAT=json`（便于日志采集）
 - 日志驱动限大小：单文件 10MB，最多 3 个（共 30MB）
