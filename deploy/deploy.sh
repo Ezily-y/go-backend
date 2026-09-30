@@ -63,6 +63,35 @@ export IMAGE
 echo "==> 拉取新镜像: ${IMAGE}"
 docker compose -f compose.prod.yaml pull app
 
+# ---------------------------------------------------------------------------
+# 修正宿主 bind mount 的属主
+#
+# compose.prod.yaml 把 ./data 和 ./logs 挂进容器。这两个目录由 docker 在
+# 宿主机上按 root 创建，而镜像里跑的是非 root 用户（busybox adduser -S 分到
+# uid=100），于是容器内 SQLite 直接打不开：
+#   初始化应用失败: 连接数据库失败: unable to open database file: out of memory (14)
+# "out of memory (14)" 是 SQLITE_CANTOPEN，跟内存无关，纯粹是目录不可写。
+#
+# 同理 .env 由 root 拥有、600 权限，容器内的 app 用户读不到 JWT_SECRET，
+# config.Validate() 会因密钥缺失/过短拒绝启动。统一按镜像里的 uid 修一次。
+# uid/gid 从镜像里现取，避免 Dockerfile 改了 adduser 之后这里悄悄失效。
+# ---------------------------------------------------------------------------
+echo "==> 修正挂载目录属主（.env、data、logs）"
+# 容器内是非 root 用户（Dockerfile 的 `adduser -S app`），宿主目录却是 root 拥有，
+# 容器一旦挂上去就打不开 SQLite / 读不到 .env。按镜像里的 uid 修一次即可。
+# 这里不写 `docker run --entrypoint id`：-u 会被 docker 自己的 --user 吃掉，
+# 导致参数错位。alpine/busybox 的 `adduser -S` 首个系统用户固定是 uid=100，
+# 与镜像实测一致（`id` 输出 uid=100 gid=101）；Dockerfile 改动时同步核对这里。
+CONTAINER_UID=100
+CONTAINER_GID=101
+
+mkdir -p data logs
+chown -R "${CONTAINER_UID}:${CONTAINER_GID}" data logs
+# .env 要能被容器内用户读取，但不能让宿主机其它用户看到密钥
+chown "${CONTAINER_UID}:${CONTAINER_GID}" .env
+chmod 0400 .env
+echo "    data/logs/.env 属主已设为 ${CONTAINER_UID}:${CONTAINER_GID}"
+
 echo '==> 启动新版本'
 docker compose -f compose.prod.yaml up -d
 
