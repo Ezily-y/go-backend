@@ -160,68 +160,32 @@ jobs:
           scp -o StrictHostKeyChecking=yes compose.prod.yaml "${SSH_TARGET}:${DEPLOY_PATH}/compose.prod.yaml"
           echo "已下发 compose.prod.yaml → ${DEPLOY_PATH}"
 
+      # 远端部署逻辑放在 deploy/deploy.sh，scp 下发后执行。
+      # 不要再写回内联 ssh "..." 的形式：那要求整段脚本嵌在双引号里，
+      # 本地 bash 会先解析 $(seq ...)、"${i}"、括号与注释，实际在 runner
+      # 就报 `syntax error near unexpected token '('`，命令到不了服务器。
       - name: 部署（拉取新镜像并滚动重启）
         env:
           IMAGE: ${{ needs.build-and-push.outputs.image }}
-          SSH_HOST: ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}
+          SSH_TARGET: ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          TCR_REGISTRY: ${{ secrets.TCR_REGISTRY }}
+          TCR_USERNAME: ${{ secrets.TCR_USERNAME }}
+          TCR_PASSWORD: ${{ secrets.TCR_PASSWORD }}
         run: |
           set -euo pipefail
 
-          echo "==> 目标: ${SSH_HOST}:${DEPLOY_PATH}"
+          echo "==> 目标: ${SSH_TARGET}:${DEPLOY_PATH}"
           echo "==> 镜像: ${IMAGE}"
 
-          ssh -o StrictHostKeyChecking=yes "${SSH_HOST}" \
-            "set -euo pipefail;
-             cd '${DEPLOY_PATH}';
+          # 下发部署脚本（与 compose.prod.yaml 放在同一目录）
+          scp -o StrictHostKeyChecking=yes deploy/deploy.sh "${SSH_TARGET}:${DEPLOY_PATH}/deploy.sh"
+          ssh -o StrictHostKeyChecking=yes "${SSH_TARGET}" \
+            "chmod +x '${DEPLOY_PATH}/deploy.sh'"
 
-             # 首次部署时把生产 compose 模板准备好
-             if [ ! -f compose.prod.yaml ]; then
-               echo '!! 未找到 compose.prod.yaml，请先完成服务器初始化';
-               exit 1;
-             fi
-
-             # .env 里存 JWT_SECRET 等，不该被 CI 覆盖，缺失则报错而不是用默认值
-             if [ ! -f .env ]; then
-               echo '!! 未找到 .env，请先执行: cp .env.example .env 并填写 JWT_SECRET';
-               exit 1;
-             fi
-
-             # 拦截样例默认密钥：dev-only-secret-change-me-0123456789 长度 36，
-             # 能通过 config.Validate 的 >=32 校验，但它是公开已知值 ——
-             # 用它签的 JWT 任何人可伪造。直接 cp .env.example 不改就部署是典型事故。
-             if grep -qE '^JWT_SECRET=(dev-only-secret-change-me|change-me)' .env; then
-               echo '!! .env 中的 JWT_SECRET 仍是样例默认值，拒绝部署。';
-               echo '   请生成随机值: openssl rand -hex 32';
-               exit 1;
-             fi
-
-             # 登录 TCR（服务器侧也要认证才能拉私有镜像）
-             docker login '${{ secrets.TCR_REGISTRY }}' \
-               -u '${{ secrets.TCR_USERNAME }}' \
-               -p '${{ secrets.TCR_PASSWORD }}';
-
-             export IMAGE='${IMAGE}';
-
-             echo '==> 拉取新镜像';
-             docker compose -f compose.prod.yaml pull app;
-
-             echo '==> 启动新版本';
-             docker compose -f compose.prod.yaml up -d;
-
-             echo '==> 等待健康检查';
-             for i in $(seq 1 30); do
-               if curl -fsS http://127.0.0.1:8080/health >/dev/null 2>&1; then
-                 echo "健康检查通过 (等待 ${i}s)";
-                 docker compose -f compose.prod.yaml ps;
-                 exit 0;
-               fi
-               sleep 1;
-             done
-
-             echo '!! 健康检查超时，回滚到上一版';
-             docker compose -f compose.prod.yaml logs --tail=50 app;
-             exit 1"
+          # 执行部署。参数用单引号包裹，避免密码等特殊字符被 shell 解析。
+          ssh -o StrictHostKeyChecking=yes "${SSH_TARGET}" \
+            "'${DEPLOY_PATH}/deploy.sh' '${DEPLOY_PATH}' '${IMAGE}' '${TCR_REGISTRY}' '${TCR_USERNAME}' '${TCR_PASSWORD}'"
 
       - name: 部署失败时输出回滚指引
         if: failure()
