@@ -53,7 +53,9 @@ jobs:
     needs: quality-gate
     timeout-minutes: 20
     outputs:
-      image: ${{ steps.meta.outputs.image }}
+      # 注意 step id 是 image，不是 meta（meta 是 metadata-action，
+      # 没有 image 输出；写错会让下游拿到空镜像地址）。
+      image: ${{ steps.image.outputs.image }}
 
     steps:
       - name: 检出代码
