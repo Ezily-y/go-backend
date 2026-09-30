@@ -959,7 +959,7 @@ make build-linux
 
 ```bash
 # 1. 克隆仓库
-git clone <repo-url> && cd go-backend
+git clone git@github.com:Ezily-y/go-backend.git && cd go-backend
 
 # 2. 整理依赖
 go mod tidy
